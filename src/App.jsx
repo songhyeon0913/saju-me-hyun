@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { buildSajuPrompt } from './prompt'
-import { supabase } from './lib/supabase'
+import { signInWithGoogle, signOut, supabase, isSupabaseConfigured } from './lib/supabase'
 import './App.css'
 
 const READING_FIELDS =
-  'id, name, birth_date, birth_time, gender, calendar_type, result, created_at'
+  'id, user_id, name, birth_date, birth_time, gender, calendar_type, result, created_at'
 
 function formatBirthMeta(reading) {
   if (!reading?.birth_date) return ''
@@ -29,8 +29,18 @@ function formatShortDate(value) {
   }).format(date)
 }
 
-function toReadingPayload(form, resultText) {
+function getUserLabel(user) {
+  return (
+    user?.user_metadata?.full_name ||
+    user?.user_metadata?.name ||
+    user?.email ||
+    '사용자'
+  )
+}
+
+function toReadingPayload(form, resultText, userId) {
   return {
+    user_id: userId,
     name: form.name,
     birth_date: form.birthDate,
     birth_time: form.birthTime || null,
@@ -82,10 +92,10 @@ async function fetchSajuReading(form) {
   return text
 }
 
-async function createSajuReading(form, resultText) {
+async function createSajuReading(form, resultText, userId) {
   const { data, error } = await supabase
     .from('saju_readings')
-    .insert(toReadingPayload(form, resultText))
+    .insert(toReadingPayload(form, resultText, userId))
     .select(READING_FIELDS)
     .single()
 
@@ -96,10 +106,10 @@ async function createSajuReading(form, resultText) {
   return data
 }
 
-async function updateSajuReading(id, form, resultText) {
+async function updateSajuReading(id, form, resultText, userId) {
   const { data, error } = await supabase
     .from('saju_readings')
-    .update(toReadingPayload(form, resultText))
+    .update(toReadingPayload(form, resultText, userId))
     .eq('id', id)
     .select(READING_FIELDS)
     .single()
@@ -133,6 +143,11 @@ async function loadSajuReadings() {
 }
 
 function App() {
+  const [user, setUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authError, setAuthError] = useState('')
+
   const [name, setName] = useState('')
   const [birthDate, setBirthDate] = useState('')
   const [birthTime, setBirthTime] = useState('')
@@ -148,7 +163,7 @@ function App() {
   const [selectedReading, setSelectedReading] = useState(null)
   const [editingId, setEditingId] = useState(null)
   const [listError, setListError] = useState('')
-  const [listLoading, setListLoading] = useState(true)
+  const [listLoading, setListLoading] = useState(false)
 
   const resultRef = useRef(null)
   const nameInputRef = useRef(null)
@@ -163,9 +178,56 @@ function App() {
     ? `${selectedReading.name}님의 사주`
     : '분석 결과'
   const resultMeta = formatBirthMeta(selectedReading)
+  const userLabel = getUserLabel(user)
 
   useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      setAuthLoading(false)
+      setUser(null)
+      return
+    }
+
     let cancelled = false
+
+    ;(async () => {
+      const { data, error: sessionError } = await supabase.auth.getSession()
+      if (cancelled) return
+
+      if (sessionError) {
+        setAuthError(sessionError.message)
+        setUser(null)
+      } else {
+        setUser(data.session?.user ?? null)
+      }
+      setAuthLoading(false)
+    })()
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+      setAuthLoading(false)
+    })
+
+    return () => {
+      cancelled = true
+      subscription.unsubscribe()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!user) {
+      setReadings([])
+      setSelectedReading(null)
+      setEditingId(null)
+      setResult('')
+      setListError('')
+      setListLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setListLoading(true)
 
     ;(async () => {
       try {
@@ -186,7 +248,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [user])
 
   useEffect(() => {
     if (!result || !resultRef.current || isEditing) return
@@ -214,6 +276,30 @@ function App() {
       const next = prev.filter((row) => row.id !== saved.id)
       return [saved, ...next]
     })
+  }
+
+  const handleGoogleLogin = async () => {
+    setAuthBusy(true)
+    setAuthError('')
+    try {
+      await signInWithGoogle()
+    } catch (err) {
+      setAuthError(err?.message || 'Google 로그인에 실패했습니다.')
+      setAuthBusy(false)
+    }
+  }
+
+  const handleSignOut = async () => {
+    setAuthBusy(true)
+    setAuthError('')
+    try {
+      await signOut()
+      handleNewSaju()
+    } catch (err) {
+      setAuthError(err?.message || '로그아웃에 실패했습니다.')
+    } finally {
+      setAuthBusy(false)
+    }
   }
 
   const handleSelectReading = (reading) => {
@@ -264,13 +350,13 @@ function App() {
   }
 
   const handleSaveInfo = async () => {
-    if (!editingId || !canSubmit) return
+    if (!editingId || !canSubmit || !user) return
 
     setSaving(true)
     setError('')
 
     try {
-      const saved = await updateSajuReading(editingId, getFormValues())
+      const saved = await updateSajuReading(editingId, getFormValues(), undefined, user.id)
       setSelectedReading(saved)
       setResult(saved.result)
       setEditingId(null)
@@ -306,7 +392,7 @@ function App() {
 
   const handleAnalyze = async (e) => {
     e.preventDefault()
-    if (!canSubmit) return
+    if (!canSubmit || !user) return
 
     setLoading(true)
     setError('')
@@ -320,8 +406,8 @@ function App() {
     try {
       const text = await fetchSajuReading(form)
       const saved = isEditing
-        ? await updateSajuReading(editingId, form, text)
-        : await createSajuReading(form, text)
+        ? await updateSajuReading(editingId, form, text, user.id)
+        : await createSajuReading(form, text, user.id)
 
       setResult(text)
       setSelectedReading(saved)
@@ -334,9 +420,81 @@ function App() {
     }
   }
 
+  if (authLoading) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <p className="brand-eyebrow">四柱命理</p>
+          <h1>사주 미</h1>
+          <p className="auth-lead">로그인 상태를 확인하는 중입니다…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!isSupabaseConfigured || !supabase) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <p className="brand-eyebrow">四柱命理</p>
+          <h1>사주 미</h1>
+          <p className="auth-lead">
+            Vercel 환경 변수에 Supabase 값이 없어 앱을 시작할 수 없습니다.
+          </p>
+          <p className="auth-hint">
+            Vercel Project Settings → Environment Variables 에
+            <br />
+            <code>VITE_SUPABASE_URL</code>, <code>VITE_SUPABASE_PUBLISHABLE_KEY</code>,
+            <br />
+            <code>VITE_GEMINI_API_KEY</code> 를 넣고 Redeploy 해주세요.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <p className="brand-eyebrow">四柱命理</p>
+          <h1>사주 미</h1>
+          <p className="auth-lead">Google 계정으로 로그인하고 내 사주 기록을 안전하게 보관하세요</p>
+          {authError ? <p className="auth-error">{authError}</p> : null}
+          <button
+            type="button"
+            className="google-login"
+            onClick={handleGoogleLogin}
+            disabled={authBusy}
+          >
+            {authBusy ? 'Google로 이동 중…' : 'Google로 계속하기'}
+          </button>
+          <p className="auth-hint">
+            Google Cloud OAuth 클라이언트와 Supabase Google provider 설정이 필요합니다.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="layout">
       <aside className="sidebar" aria-label="저장된 사주 목록">
+        <div className="auth-user">
+          <div className="auth-user-copy">
+            <p className="auth-user-label">로그인됨</p>
+            <p className="auth-user-name">{userLabel}</p>
+          </div>
+          <button
+            type="button"
+            className="action-btn"
+            onClick={handleSignOut}
+            disabled={authBusy}
+          >
+            로그아웃
+          </button>
+        </div>
+
         <button type="button" className="new-saju" onClick={handleNewSaju}>
           + 새 사주 만들기
         </button>
