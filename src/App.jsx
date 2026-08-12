@@ -29,6 +29,17 @@ function formatShortDate(value) {
   }).format(date)
 }
 
+function toReadingPayload(form, resultText) {
+  return {
+    name: form.name,
+    birth_date: form.birthDate,
+    birth_time: form.birthTime || null,
+    gender: form.gender,
+    calendar_type: form.calendarType,
+    ...(resultText !== undefined ? { result: resultText } : {}),
+  }
+}
+
 async function fetchSajuReading(form) {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY
   if (!apiKey) {
@@ -71,17 +82,10 @@ async function fetchSajuReading(form) {
   return text
 }
 
-async function saveSajuReading(form, resultText) {
+async function createSajuReading(form, resultText) {
   const { data, error } = await supabase
     .from('saju_readings')
-    .insert({
-      name: form.name,
-      birth_date: form.birthDate,
-      birth_time: form.birthTime || null,
-      gender: form.gender,
-      calendar_type: form.calendarType,
-      result: resultText,
-    })
+    .insert(toReadingPayload(form, resultText))
     .select(READING_FIELDS)
     .single()
 
@@ -90,6 +94,29 @@ async function saveSajuReading(form, resultText) {
   }
 
   return data
+}
+
+async function updateSajuReading(id, form, resultText) {
+  const { data, error } = await supabase
+    .from('saju_readings')
+    .update(toReadingPayload(form, resultText))
+    .eq('id', id)
+    .select(READING_FIELDS)
+    .single()
+
+  if (error) {
+    throw new Error(error.message || '사주 기록 수정에 실패했습니다.')
+  }
+
+  return data
+}
+
+async function deleteSajuReading(id) {
+  const { error } = await supabase.from('saju_readings').delete().eq('id', id)
+
+  if (error) {
+    throw new Error(error.message || '사주 기록 삭제에 실패했습니다.')
+  }
 }
 
 async function loadSajuReadings() {
@@ -114,10 +141,12 @@ function App() {
 
   const [result, setResult] = useState('')
   const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   const [readings, setReadings] = useState([])
   const [selectedReading, setSelectedReading] = useState(null)
+  const [editingId, setEditingId] = useState(null)
   const [listError, setListError] = useState('')
   const [listLoading, setListLoading] = useState(true)
 
@@ -125,9 +154,11 @@ function App() {
   const nameInputRef = useRef(null)
   const formTopRef = useRef(null)
 
-  const canSubmit = Boolean(name.trim() && birthDate && gender && !loading)
+  const busy = loading || saving
+  const canSubmit = Boolean(name.trim() && birthDate && gender && !busy)
   const selectedId = selectedReading?.id ?? null
-  const isViewing = Boolean(selectedReading && result && !loading)
+  const isEditing = Boolean(editingId)
+  const isViewing = Boolean(selectedReading && result && !loading && !isEditing)
   const resultTitle = selectedReading?.name
     ? `${selectedReading.name}님의 사주`
     : '분석 결과'
@@ -158,19 +189,39 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!result || !resultRef.current) return
+    if (!result || !resultRef.current || isEditing) return
     resultRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }, [selectedId, result])
+  }, [selectedId, result, isEditing])
 
-  const handleSelectReading = (reading) => {
-    setSelectedReading(reading)
-    setResult(reading.result)
-    setError('')
+  const getFormValues = () => ({
+    name: name.trim(),
+    birthDate,
+    birthTime,
+    gender,
+    calendarType,
+  })
+
+  const applyReadingToForm = (reading) => {
     setName(reading.name ?? '')
     setBirthDate(reading.birth_date ?? '')
     setBirthTime(reading.birth_time ? String(reading.birth_time).slice(0, 5) : '')
     setGender(reading.gender ?? '')
     setCalendarType(reading.calendar_type ?? 'solar')
+  }
+
+  const replaceReadingInList = (saved) => {
+    setReadings((prev) => {
+      const next = prev.filter((row) => row.id !== saved.id)
+      return [saved, ...next]
+    })
+  }
+
+  const handleSelectReading = (reading) => {
+    setEditingId(null)
+    setSelectedReading(reading)
+    setResult(reading.result)
+    setError('')
+    applyReadingToForm(reading)
   }
 
   const handleNewSaju = () => {
@@ -181,6 +232,7 @@ function App() {
     setCalendarType('solar')
     setResult('')
     setSelectedReading(null)
+    setEditingId(null)
     setError('')
     window.scrollTo({ top: 0, behavior: 'smooth' })
     requestAnimationFrame(() => {
@@ -189,29 +241,92 @@ function App() {
     })
   }
 
+  const handleStartEdit = () => {
+    if (!selectedReading) return
+    applyReadingToForm(selectedReading)
+    setEditingId(selectedReading.id)
+    setError('')
+    requestAnimationFrame(() => {
+      nameInputRef.current?.focus()
+      formTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
+  const handleCancelEdit = () => {
+    if (!selectedReading) {
+      setEditingId(null)
+      return
+    }
+    applyReadingToForm(selectedReading)
+    setEditingId(null)
+    setResult(selectedReading.result)
+    setError('')
+  }
+
+  const handleSaveInfo = async () => {
+    if (!editingId || !canSubmit) return
+
+    setSaving(true)
+    setError('')
+
+    try {
+      const saved = await updateSajuReading(editingId, getFormValues())
+      setSelectedReading(saved)
+      setResult(saved.result)
+      setEditingId(null)
+      replaceReadingInList(saved)
+    } catch (err) {
+      setError(err?.message || '사주 기록 수정 중 오류가 발생했습니다.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!selectedReading || busy) return
+
+    const ok = window.confirm(
+      `"${selectedReading.name}" 사주 기록을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`,
+    )
+    if (!ok) return
+
+    setSaving(true)
+    setError('')
+
+    try {
+      await deleteSajuReading(selectedReading.id)
+      setReadings((prev) => prev.filter((row) => row.id !== selectedReading.id))
+      handleNewSaju()
+    } catch (err) {
+      setError(err?.message || '사주 기록 삭제 중 오류가 발생했습니다.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const handleAnalyze = async (e) => {
     e.preventDefault()
     if (!canSubmit) return
 
     setLoading(true)
     setError('')
-    setResult('')
-    setSelectedReading(null)
-
-    const form = {
-      name: name.trim(),
-      birthDate,
-      birthTime,
-      gender,
-      calendarType,
+    if (!isEditing) {
+      setResult('')
+      setSelectedReading(null)
     }
+
+    const form = getFormValues()
 
     try {
       const text = await fetchSajuReading(form)
-      const saved = await saveSajuReading(form, text)
+      const saved = isEditing
+        ? await updateSajuReading(editingId, form, text)
+        : await createSajuReading(form, text)
+
       setResult(text)
       setSelectedReading(saved)
-      setReadings((prev) => [saved, ...prev])
+      setEditingId(null)
+      replaceReadingInList(saved)
     } catch (err) {
       setError(err?.message || '사주 분석 중 오류가 발생했습니다.')
     } finally {
@@ -281,6 +396,13 @@ function App() {
                 <p className="brand-lead">저장된 사주 결과를 보고 있습니다</p>
                 <p className="preview">{selectedReading.name}님의 사주</p>
               </>
+            ) : isEditing ? (
+              <>
+                <p className="brand-lead">저장된 사주 기록을 수정합니다</p>
+                <p className={`preview${name.trim() ? '' : ' is-empty'}`}>
+                  {name.trim() || 'OOO'}님의 사주
+                </p>
+              </>
             ) : (
               <>
                 <p className="brand-lead">사주 보기 전, 기본 정보를 입력해주세요</p>
@@ -303,7 +425,7 @@ function App() {
                   onChange={(e) => setName(e.target.value)}
                   required
                   autoComplete="name"
-                  disabled={loading}
+                  disabled={busy}
                 />
               </label>
 
@@ -315,7 +437,7 @@ function App() {
                     value={birthDate}
                     onChange={(e) => setBirthDate(e.target.value)}
                     required
-                    disabled={loading}
+                    disabled={busy}
                   />
                 </label>
 
@@ -328,7 +450,7 @@ function App() {
                     type="time"
                     value={birthTime}
                     onChange={(e) => setBirthTime(e.target.value)}
-                    disabled={loading}
+                    disabled={busy}
                   />
                   <span className="field-hint">모르면 비워 두셔도 됩니다</span>
                 </label>
@@ -341,7 +463,7 @@ function App() {
                     value={gender}
                     onChange={(e) => setGender(e.target.value)}
                     required
-                    disabled={loading}
+                    disabled={busy}
                   >
                     <option value="">선택하세요</option>
                     <option value="male">남성</option>
@@ -349,7 +471,7 @@ function App() {
                   </select>
                 </label>
 
-                <fieldset className="field calendar" disabled={loading}>
+                <fieldset className="field calendar" disabled={busy}>
                   <legend className="field-label">양력 / 음력</legend>
                   <div className="segment">
                     <label>
@@ -376,9 +498,33 @@ function App() {
                 </fieldset>
               </div>
 
-              <button type="submit" className="submit" disabled={!canSubmit}>
-                {loading ? '사주 풀이 중…' : '내 사주 보기'}
-              </button>
+              {isEditing ? (
+                <div className="form-actions">
+                  <button type="submit" className="submit" disabled={!canSubmit}>
+                    {loading ? '다시 풀이 중…' : '다시 분석하고 저장'}
+                  </button>
+                  <button
+                    type="button"
+                    className="submit submit-secondary"
+                    disabled={!canSubmit}
+                    onClick={handleSaveInfo}
+                  >
+                    {saving ? '저장 중…' : '정보만 저장'}
+                  </button>
+                  <button
+                    type="button"
+                    className="action-btn"
+                    disabled={busy}
+                    onClick={handleCancelEdit}
+                  >
+                    수정 취소
+                  </button>
+                </div>
+              ) : (
+                <button type="submit" className="submit" disabled={!canSubmit}>
+                  {loading ? '사주 풀이 중…' : '내 사주 보기'}
+                </button>
+              )}
             </form>
           ) : null}
 
@@ -397,15 +543,17 @@ function App() {
 
           {error ? (
             <div className="error" role="alert">
-              <p className="error-title">분석을 완료하지 못했습니다</p>
+              <p className="error-title">요청을 완료하지 못했습니다</p>
               <p>{error}</p>
-              <button type="button" className="error-retry" onClick={handleNewSaju}>
-                입력부터 다시하기
-              </button>
+              {!isEditing ? (
+                <button type="button" className="error-retry" onClick={handleNewSaju}>
+                  입력부터 다시하기
+                </button>
+              ) : null}
             </div>
           ) : null}
 
-          {result && !loading ? (
+          {result && !loading && !isEditing ? (
             <section
               key={selectedId || 'latest'}
               ref={resultRef}
@@ -415,13 +563,31 @@ function App() {
               <header className="result-header">
                 <div className="result-header-top">
                   <p className="result-eyebrow">四柱命理 · 분석 결과</p>
-                  <button
-                    type="button"
-                    className="new-saju new-saju-inline"
-                    onClick={handleNewSaju}
-                  >
-                    + 새 사주 만들기
-                  </button>
+                  <div className="result-actions">
+                    <button
+                      type="button"
+                      className="action-btn"
+                      onClick={handleStartEdit}
+                      disabled={busy}
+                    >
+                      수정
+                    </button>
+                    <button
+                      type="button"
+                      className="action-btn action-btn-danger"
+                      onClick={handleDelete}
+                      disabled={busy}
+                    >
+                      삭제
+                    </button>
+                    <button
+                      type="button"
+                      className="new-saju new-saju-inline"
+                      onClick={handleNewSaju}
+                    >
+                      + 새 사주 만들기
+                    </button>
+                  </div>
                 </div>
                 <h2 className="result-heading">{resultTitle}</h2>
                 {resultMeta ? <p className="result-meta">{resultMeta}</p> : null}
@@ -430,9 +596,27 @@ function App() {
                 <ReactMarkdown>{result}</ReactMarkdown>
               </div>
               <footer className="result-footer">
-                <button type="button" className="new-saju" onClick={handleNewSaju}>
-                  + 새 사주 만들기
-                </button>
+                <div className="result-footer-actions">
+                  <button
+                    type="button"
+                    className="action-btn"
+                    onClick={handleStartEdit}
+                    disabled={busy}
+                  >
+                    수정
+                  </button>
+                  <button
+                    type="button"
+                    className="action-btn action-btn-danger"
+                    onClick={handleDelete}
+                    disabled={busy}
+                  >
+                    삭제
+                  </button>
+                  <button type="button" className="new-saju" onClick={handleNewSaju}>
+                    + 새 사주 만들기
+                  </button>
+                </div>
               </footer>
             </section>
           ) : null}

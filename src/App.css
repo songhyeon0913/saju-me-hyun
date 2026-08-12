@@ -646,6 +646,67 @@
   border-top: 1px solid var(--line);
 }
 
+.result-actions,
+.result-footer-actions,
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.result-footer-actions .new-saju,
+.form-actions .submit {
+  flex: 1 1 12rem;
+}
+
+.action-btn {
+  min-height: 2.1rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.action-btn:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.action-btn-danger {
+  color: var(--danger);
+  border-color: rgba(180, 35, 24, 0.28);
+}
+
+.action-btn-danger:hover:not(:disabled) {
+  background: #fff7f6;
+  border-color: rgba(180, 35, 24, 0.4);
+  color: var(--danger);
+}
+
+.submit-secondary {
+  background: #fff;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+.submit-secondary:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
 .panel.is-viewing .brand-lead {
   white-space: normal;
 }
