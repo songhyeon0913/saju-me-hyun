@@ -31,7 +31,13 @@ export async function signInWithGoogle() {
   })
 
   if (error) {
-    throw new Error(error.message || 'Google 로그인에 실패했습니다.')
+    const message = error.message || 'Google 로그인에 실패했습니다.'
+    if (/provider is not enabled|Unsupported provider/i.test(message)) {
+      throw new Error(
+        'Supabase에서 Google provider가 아직 켜져 있지 않습니다. Dashboard → Authentication → Providers → Google 을 Enable 하고 Client ID/Secret을 저장해 주세요.',
+      )
+    }
+    throw new Error(message)
   }
 }
 

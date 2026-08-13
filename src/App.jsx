@@ -30,12 +30,7 @@ function formatShortDate(value) {
 }
 
 function getUserLabel(user) {
-  return (
-    user?.user_metadata?.full_name ||
-    user?.user_metadata?.name ||
-    user?.email ||
-    '사용자'
-  )
+  return user?.email || user?.user_metadata?.full_name || user?.user_metadata?.name || '사용자'
 }
 
 function toReadingPayload(form, resultText, userId) {
@@ -439,38 +434,12 @@ function App() {
           <p className="brand-eyebrow">四柱命理</p>
           <h1>사주 미</h1>
           <p className="auth-lead">
-            Vercel 환경 변수에 Supabase 값이 없어 앱을 시작할 수 없습니다.
+            `.env`에 Supabase 값이 없어 앱을 시작할 수 없습니다.
           </p>
           <p className="auth-hint">
-            Vercel Project Settings → Environment Variables 에
-            <br />
             <code>VITE_SUPABASE_URL</code>, <code>VITE_SUPABASE_PUBLISHABLE_KEY</code>,
             <br />
-            <code>VITE_GEMINI_API_KEY</code> 를 넣고 Redeploy 해주세요.
-          </p>
-        </div>
-      </div>
-    )
-  }
-
-  if (!user) {
-    return (
-      <div className="auth-screen">
-        <div className="auth-card">
-          <p className="brand-eyebrow">四柱命理</p>
-          <h1>사주 미</h1>
-          <p className="auth-lead">Google 계정으로 로그인하고 내 사주 기록을 안전하게 보관하세요</p>
-          {authError ? <p className="auth-error">{authError}</p> : null}
-          <button
-            type="button"
-            className="google-login"
-            onClick={handleGoogleLogin}
-            disabled={authBusy}
-          >
-            {authBusy ? 'Google로 이동 중…' : 'Google로 계속하기'}
-          </button>
-          <p className="auth-hint">
-            Google Cloud OAuth 클라이언트와 Supabase Google provider 설정이 필요합니다.
+            <code>VITE_GEMINI_API_KEY</code> 를 넣고 개발 서버를 다시 시작해 주세요.
           </p>
         </div>
       </div>
@@ -480,20 +449,37 @@ function App() {
   return (
     <div className="layout">
       <aside className="sidebar" aria-label="저장된 사주 목록">
-        <div className="auth-user">
-          <div className="auth-user-copy">
-            <p className="auth-user-label">로그인됨</p>
-            <p className="auth-user-name">{userLabel}</p>
+        {user ? (
+          <div className="auth-user">
+            <div className="auth-user-copy">
+              <p className="auth-user-label">내 이메일</p>
+              <p className="auth-user-name" title={user.email || userLabel}>
+                {user.email || userLabel}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="action-btn"
+              onClick={handleSignOut}
+              disabled={authBusy}
+            >
+              로그아웃
+            </button>
           </div>
-          <button
-            type="button"
-            className="action-btn"
-            onClick={handleSignOut}
-            disabled={authBusy}
-          >
-            로그아웃
-          </button>
-        </div>
+        ) : (
+          <div className="auth-guest">
+            <button
+              type="button"
+              className="google-login"
+              onClick={handleGoogleLogin}
+              disabled={authBusy}
+            >
+              {authBusy ? 'Google로 이동 중…' : 'Google로 로그인'}
+            </button>
+            {authError ? <p className="auth-error">{authError}</p> : null}
+            <p className="auth-hint">로그인하면 사주 기록을 저장할 수 있어요</p>
+          </div>
+        )}
 
         <button type="button" className="new-saju" onClick={handleNewSaju}>
           + 새 사주 만들기
@@ -504,43 +490,52 @@ function App() {
             <p className="sidebar-eyebrow">命錄</p>
             <div className="sidebar-heading-row">
               <h2 className="sidebar-title">저장된 사주</h2>
-              {!listLoading && !listError ? (
+              {user && !listLoading && !listError ? (
                 <span className="sidebar-count">{readings.length}명</span>
               ) : null}
             </div>
-            <p className="sidebar-lead">이전에 본 사주를 다시 열어보세요</p>
+            <p className="sidebar-lead">
+              {user
+                ? '이전에 본 사주를 다시 열어보세요'
+                : '로그인 후 내 사주 기록을 볼 수 있어요'}
+            </p>
           </div>
 
-          {listLoading ? <p className="sidebar-empty">목록을 불러오는 중…</p> : null}
-          {listError ? <p className="sidebar-error">{listError}</p> : null}
-          {!listLoading && !listError && readings.length === 0 ? (
+          {!user ? (
+            <p className="sidebar-empty">로그인하면 저장된 사주가 여기에 표시됩니다.</p>
+          ) : null}
+          {user && listLoading ? <p className="sidebar-empty">목록을 불러오는 중…</p> : null}
+          {user && listError ? <p className="sidebar-error">{listError}</p> : null}
+          {user && !listLoading && !listError && readings.length === 0 ? (
             <p className="sidebar-empty">아직 저장된 사주가 없습니다.</p>
           ) : null}
 
-          <ul className="sidebar-list">
-            {readings.map((reading) => {
-              const initial = (reading.name || '?').trim().slice(0, 1)
-              return (
-                <li key={reading.id}>
-                  <button
-                    type="button"
-                    className={`sidebar-item${selectedId === reading.id ? ' is-active' : ''}`}
-                    onClick={() => handleSelectReading(reading)}
-                  >
-                    <span className="sidebar-item-mark" aria-hidden="true">
-                      {initial}
-                    </span>
-                    <span className="sidebar-item-copy">
-                      <span className="sidebar-item-name">{reading.name}</span>
-                      <span className="sidebar-item-meta">
-                        {reading.birth_date || formatShortDate(reading.created_at)}
+          {user ? (
+            <ul className="sidebar-list">
+              {readings.map((reading) => {
+                const initial = (reading.name || '?').trim().slice(0, 1)
+                return (
+                  <li key={reading.id}>
+                    <button
+                      type="button"
+                      className={`sidebar-item${selectedId === reading.id ? ' is-active' : ''}`}
+                      onClick={() => handleSelectReading(reading)}
+                    >
+                      <span className="sidebar-item-mark" aria-hidden="true">
+                        {initial}
                       </span>
-                    </span>
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
+                      <span className="sidebar-item-copy">
+                        <span className="sidebar-item-name">{reading.name}</span>
+                        <span className="sidebar-item-meta">
+                          {reading.birth_date || formatShortDate(reading.created_at)}
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : null}
         </div>
       </aside>
 
@@ -658,13 +653,13 @@ function App() {
 
               {isEditing ? (
                 <div className="form-actions">
-                  <button type="submit" className="submit" disabled={!canSubmit}>
+                  <button type="submit" className="submit" disabled={!canSubmit || !user}>
                     {loading ? '다시 풀이 중…' : '다시 분석하고 저장'}
                   </button>
                   <button
                     type="button"
                     className="submit submit-secondary"
-                    disabled={!canSubmit}
+                    disabled={!canSubmit || !user}
                     onClick={handleSaveInfo}
                   >
                     {saving ? '저장 중…' : '정보만 저장'}
@@ -678,10 +673,25 @@ function App() {
                     수정 취소
                   </button>
                 </div>
-              ) : (
+              ) : user ? (
                 <button type="submit" className="submit" disabled={!canSubmit}>
                   {loading ? '사주 풀이 중…' : '내 사주 보기'}
                 </button>
+              ) : (
+                <div className="login-required">
+                  <p className="login-required-text">
+                    사주 분석을 저장하려면 Google 로그인이 필요합니다.
+                  </p>
+                  <button
+                    type="button"
+                    className="google-login"
+                    onClick={handleGoogleLogin}
+                    disabled={authBusy}
+                  >
+                    {authBusy ? 'Google로 이동 중…' : 'Google로 로그인'}
+                  </button>
+                  {authError ? <p className="auth-error">{authError}</p> : null}
+                </div>
               )}
             </form>
           ) : null}
