@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { buildSajuPrompt } from './prompt'
 import { signInWithGoogle, signOut, supabase, isSupabaseConfigured } from './lib/supabase'
-import mascotDesk from './assets/mascot/desk.png'
 import mascotCrystal from './assets/mascot/crystal.png'
 import mascotScholar from './assets/mascot/scholar.png'
 import mascotWriter from './assets/mascot/writer.png'
@@ -917,11 +916,6 @@ function App() {
           ) : null}
 
           <header className="brand" ref={formTopRef}>
-            <img
-              className="mascot mascot-desk"
-              src={mascotDesk}
-              alt="사주풀이 책상 앞의 마스코트"
-            />
             <p className="brand-eyebrow">四柱命理</p>
             <h1>사주 미</h1>
             {isViewing ? (
